@@ -8,6 +8,7 @@ import { sendEmail } from './utils/sendEmail';
 import { UserInput } from './UserInput';
 import { validateRegister } from './utils/validateRegister';
 import { v4 } from 'uuid';
+import { sleep } from './utils/sleep';
 
 declare module 'express-session' {
   interface SessionData {
@@ -113,7 +114,10 @@ export class UserResolver {
     @Ctx() { em, redis }: MyContext
   ): Promise<boolean> {
     const user = await em.findOne(User, { email: email });
-    if (!user) return true;
+    if (!user) {
+      await sleep(5000);
+      return true;
+    }
     const token = v4();
     await redis.set(FORGET_PASSWORD_PREFIX + token, user.id, 'ex', 1000 * 60 * 10);
     await sendEmail(
