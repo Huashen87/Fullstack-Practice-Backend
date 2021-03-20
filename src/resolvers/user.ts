@@ -1,22 +1,18 @@
 import { User } from '../entities/User';
 import { MyContext } from 'src/types';
-import { Arg, Ctx, Field, InputType, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
+import { Arg, Ctx, Field, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import argon2 from 'argon2';
 import 'express-session';
-import { COOKIE_NAME } from '../constants';
+import { COOKIE_NAME, FORGET_PASSWORD_PREFIX } from '../constants';
+import { sendEmail } from './utils/sendEmail';
+import { UserInput } from './UserInput';
+import { validateRegister } from './utils/validateRegister';
+import { v4 } from 'uuid';
 
 declare module 'express-session' {
   interface SessionData {
     userId?: number;
   }
-}
-
-@InputType()
-class UsernamePasswordInput {
-  @Field()
-  username: string;
-  @Field()
-  password: string;
 }
 
 @ObjectType()
@@ -48,26 +44,49 @@ export class UserResolver {
     const users = await em.find(User, {});
     return users;
   }
+
   @Mutation(() => UserResponse)
-  async register(@Arg('options') options: UsernamePasswordInput, @Ctx() { req, em }: MyContext) {
-    if (options.username.length < 3) return { errors: [{ field: 'username', message: 'length must be at least 3' }] };
-    if (options.password.length < 6) return { errors: [{ field: 'password', message: 'length must be at least 6' }] };
+  async register(@Arg('options') options: UserInput, @Ctx() { req, em }: MyContext) {
+    const errors = validateRegister(options);
+    if (errors) return { errors: errors };
     const hashedPassword = await argon2.hash(options.password);
-    const user = em.create(User, { username: options.username, password: hashedPassword });
+    const user = em.create(User, {
+      username: options.username,
+      password: hashedPassword,
+      email: options.email,
+    });
     try {
       await em.persistAndFlush(user);
     } catch (err) {
-      if (err.code === '23505') return { errors: [{ field: 'username', message: 'username already taken' }] };
+      if (err.code === '23505')
+        return {
+          errors: [{ field: 'usernameOrEmail', message: 'username or email already taken' }],
+        };
     }
     req.session.userId = user.id;
     return { user: user };
   }
 
   @Mutation(() => UserResponse)
-  async login(@Arg('options') options: UsernamePasswordInput, @Ctx() { em, req }: MyContext): Promise<UserResponse> {
-    const user = await em.findOne(User, { username: options.username });
-    if (!user) return { errors: [{ field: 'username', message: "that username doesn't exist" }] };
-    const valid = await argon2.verify(user.password, options.password);
+  async login(
+    @Arg('usernameOrEmail') usernameOrEmail: string,
+    @Arg('password') password: string,
+    @Ctx() { em, req }: MyContext
+  ): Promise<UserResponse> {
+    const user = await em.findOne(
+      User,
+      usernameOrEmail.includes('@') ? { email: usernameOrEmail } : { username: usernameOrEmail }
+    );
+    if (!user)
+      return {
+        errors: [
+          {
+            field: 'usernameOrEmail',
+            message: `that ${usernameOrEmail.includes('@') ? 'email' : 'username'} doesn't exist`,
+          },
+        ],
+      };
+    const valid = await argon2.verify(user.password, password);
     if (!valid) return { errors: [{ field: 'password', message: 'incorrect password' }] };
     req.session.userId = user.id;
     return { user: user };
@@ -86,5 +105,23 @@ export class UserResolver {
         resolve(true);
       })
     );
+  }
+
+  @Mutation(() => Boolean)
+  async forgotPassword(
+    @Arg('email') email: string,
+    @Ctx() { em, redis }: MyContext
+  ): Promise<boolean> {
+    const user = await em.findOne(User, { email: email });
+    if (!user) return true;
+    const token = v4();
+    await redis.set(FORGET_PASSWORD_PREFIX + token, user.id, 'ex', 1000 * 60 * 10);
+    await sendEmail(
+      email,
+      `<h2>Hi ${user.username}.</h2>
+      <p>Please click the link below to reset your password!</p>
+      <a href="http://localhost:3000/reset-password/${token}">Reset Your Password</a>`
+    );
+    return true;
   }
 }
