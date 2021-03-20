@@ -124,4 +124,31 @@ export class UserResolver {
     );
     return true;
   }
+
+  @Mutation(() => UserResponse)
+  async resetPassword(
+    @Arg('token') token: string,
+    @Arg('newPassword') newPassword: string,
+    @Arg('confirmPassword') confirmPassword: string,
+    @Ctx() { em, redis, req }: MyContext
+  ) {
+    if (newPassword.length < 6)
+      return { errors: [{ field: 'newPassword', message: 'length must be at least 6' }] };
+    if (confirmPassword !== newPassword)
+      return { errors: [{ field: 'confirmPassword', message: 'password not match' }] };
+
+    const key = FORGET_PASSWORD_PREFIX + token;
+    const userId = await redis.get(key);
+    if (!userId) return { errors: [{ field: 'token', message: 'token expired' }] };
+
+    const user = await em.findOne(User, { id: parseInt(userId) });
+    if (!user) return { errors: [{ field: 'token', message: 'user no longer exists' }] };
+    user.password = await argon2.hash(newPassword);
+    await em.persistAndFlush(user);
+
+    req.session.userId = user.id;
+    await redis.del(key);
+
+    return { user: user };
+  }
 }
