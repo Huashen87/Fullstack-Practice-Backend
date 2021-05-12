@@ -1,5 +1,5 @@
 import { User } from '../entities/User';
-import { MyContext } from 'src/types';
+import { MyContext } from '../types';
 import { Arg, Ctx, Field, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import argon2 from 'argon2';
 import 'express-session';
@@ -9,7 +9,6 @@ import { UserInput } from './UserInput';
 import { validateRegister } from './utils/validateRegister';
 import { v4 } from 'uuid';
 import { sleep } from './utils/sleep';
-import { getConnection } from 'typeorm';
 
 declare module 'express-session' {
   interface SessionData {
